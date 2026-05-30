@@ -8,37 +8,60 @@
     const out = document.getElementById("out");
 
     const pc = new RTCPeerConnection({
-        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" }
+        ]
     });
 
     pc.createDataChannel("");
 
     let done = false;
+    let foundPublicIP = null;
 
     const timeout = setTimeout(() => {
         if (!done) {
-            out.textContent = "ERROR: WEBRTC_BLOCKED";
+            out.textContent = "ERROR: NO_PUBLIC_IP (WebRTC blocked or masked)";
             pc.close();
         }
     }, 5000);
 
+    function extractIP(candidate) {
+        const parts = candidate.split(" ");
+
+        const typeIndex = parts.indexOf("typ");
+        const type = typeIndex !== -1 ? parts[typeIndex + 1] : "";
+
+        const ip = parts[4];
+
+        return { ip, type };
+    }
+
     pc.onicecandidate = (e) => {
         if (!e.candidate || done) return;
 
-        const parts = e.candidate.candidate.split(" ");
-        const ip = parts[4];
+        const { ip, type } = extractIP(e.candidate.candidate);
 
-        if (!ip) return;
-
-        done = true;
-        clearTimeout(timeout);
-
-        out.textContent = ip;
-        pc.close();
+        // ONLY keep public IP candidates
+        if (type === "srflx" && ip && !ip.endsWith(".local")) {
+            foundPublicIP = ip;
+        }
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
+
+    // wait a bit for ICE gathering to finish
+    setTimeout(() => {
+        done = true;
+        clearTimeout(timeout);
+        pc.close();
+
+        if (foundPublicIP) {
+            out.textContent = foundPublicIP;
+        } else {
+            out.textContent = "ERROR: NO_PUBLIC_IP (WebRTC did not expose srflx candidate)";
+        }
+    }, 3000);
 })();
 </script>
 
