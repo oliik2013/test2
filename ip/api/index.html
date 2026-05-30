@@ -1,7 +1,12 @@
 <!DOCTYPE html>
 <html>
+<head>
+<meta charset="UTF-8">
+<title>STUN Public IP</title>
+</head>
+
 <body>
-<pre id="out">LOADING</pre>
+<pre id="out">INITIALIZING...</pre>
 
 <script>
 (async () => {
@@ -13,23 +18,16 @@
         ]
     });
 
-    pc.createDataChannel("");
+    pc.createDataChannel("ip");
 
+    let publicIP = null;
     let done = false;
-    let foundPublicIP = null;
 
-    const timeout = setTimeout(() => {
-        if (!done) {
-            out.textContent = "ERROR: NO_PUBLIC_IP (WebRTC blocked or masked)";
-            pc.close();
-        }
-    }, 5000);
-
-    function extractIP(candidate) {
-        const parts = candidate.split(" ");
+    function parseCandidate(cand) {
+        const parts = cand.split(" ");
 
         const typeIndex = parts.indexOf("typ");
-        const type = typeIndex !== -1 ? parts[typeIndex + 1] : "";
+        const type = typeIndex !== -1 ? parts[typeIndex + 1] : null;
 
         const ip = parts[4];
 
@@ -39,29 +37,28 @@
     pc.onicecandidate = (e) => {
         if (!e.candidate || done) return;
 
-        const { ip, type } = extractIP(e.candidate.candidate);
+        const { ip, type } = parseCandidate(e.candidate.candidate);
 
-        // ONLY keep public IP candidates
+        // ONLY STUN-derived public IP
         if (type === "srflx" && ip && !ip.endsWith(".local")) {
-            foundPublicIP = ip;
+            publicIP = ip;
         }
     };
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
-    // wait a bit for ICE gathering to finish
+    // wait for ICE gathering
     setTimeout(() => {
         done = true;
-        clearTimeout(timeout);
         pc.close();
 
-        if (foundPublicIP) {
-            out.textContent = foundPublicIP;
+        if (publicIP) {
+            out.textContent = publicIP;
         } else {
-            out.textContent = "ERROR: NO_PUBLIC_IP (WebRTC did not expose srflx candidate)";
+            out.textContent = "ERROR: NO_STUN_PUBLIC_IP\n(WebRTC did not expose srflx candidate)";
         }
-    }, 3000);
+    }, 4000);
 })();
 </script>
 
