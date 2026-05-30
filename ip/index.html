@@ -2,94 +2,163 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>WebRTC IP Detector</title>
+<title>WebRTC Network Inspector</title>
+
 <style>
     body {
-        font-family: monospace;
-        background: #0d1117;
-        color: #c9d1d9;
-        padding: 20px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        background: #0b0f14;
+        color: #d6dde6;
+        padding: 24px;
     }
     .ok { color: #3fb950; }
+    .warn { color: #d29922; }
     .bad { color: #f85149; }
-    .box {
-        margin-top: 10px;
-        padding: 10px;
-        border: 1px solid #30363d;
+
+    .card {
+        margin-top: 12px;
+        padding: 12px;
+        border: 1px solid #2a3441;
         border-radius: 8px;
-        background: #161b22;
+        background: #111823;
+    }
+
+    .row {
+        margin: 6px 0;
     }
 </style>
 </head>
+
 <body>
 
-<h2>WebRTC IP Detector</h2>
-<div id="status">Starting...</div>
-<div class="box" id="output"></div>
+<h2>WebRTC Network Inspector</h2>
+
+<div id="status">Initializing WebRTC…</div>
+
+<div class="card" id="output">
+    <div class="row">Waiting for ICE candidates…</div>
+</div>
 
 <script>
-const output = document.getElementById("output");
-const status = document.getElementById("status");
+(() => {
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
 
-const ips = new Set();
-let finished = false;
+    const results = {
+        host: new Set(),
+        srflx: new Set(),
+        relay: new Set()
+    };
 
-// Create RTCPeerConnection
-const pc = new RTCPeerConnection({
-    iceServers: [
-        { urls: "stun:stun.l.google.com:19302" }
-    ]
-});
+    let done = false;
 
-// Needed to trigger ICE gathering
-pc.createDataChannel("");
+    function parseCandidate(candidate) {
+        // RFC 5245 ICE format:
+        // candidate:<foundation> <component> <protocol> <priority> <ip> <port> typ <type>
+        const parts = candidate.split(" ");
 
-// Collect ICE candidates
-pc.onicecandidate = (event) => {
-    if (!event.candidate) return;
+        const ip = parts[4];
+        const typeIndex = parts.indexOf("typ");
+        const type = typeIndex !== -1 ? parts[typeIndex + 1] : "unknown";
 
-    const cand = event.candidate.candidate;
+        if (!ip) return;
 
-    // Extract IPv4 / IPv6
-    const match = cand.match(
-        /(\d{1,3}(\.\d{1,3}){3}|[a-f0-9:]{2,})/i
-    );
-
-    if (match) {
-        ips.add(match[1]);
-        render();
+        return { ip, type };
     }
-};
 
-// Start negotiation
-pc.createOffer()
-    .then(offer => pc.setLocalDescription(offer))
-    .catch(err => {
-        status.innerHTML = `<span class="bad">Error starting WebRTC: ${err}</span>`;
+    function render() {
+        const host = [...results.host];
+        const srflx = [...results.srflx];
+        const relay = [...results.relay];
+
+        let html = "";
+
+        const hasAny = host.length || srflx.length || relay.length;
+
+        if (!hasAny) {
+            html = `<div class="warn">No candidates yet… WebRTC may be blocked or delayed.</div>`;
+        } else {
+            statusEl.innerHTML = `<span class="ok">WebRTC ACTIVE</span>`;
+
+            if (host.length) {
+                html += `<div class="row"><b>Host (local network)</b></div>`;
+                html += host.map(i => `<div>• ${i}</div>`).join("");
+            }
+
+            if (srflx.length) {
+                html += `<div class="row"><b>Server reflexive (public IP via STUN)</b></div>`;
+                html += srflx.map(i => `<div>• ${i}</div>`).join("");
+            }
+
+            if (relay.length) {
+                html += `<div class="row"><b>Relay (TURN)</b></div>`;
+                html += relay.map(i => `<div>• ${i}</div>`).join("");
+            }
+        }
+
+        outputEl.innerHTML = html;
+    }
+
+    const pc = new RTCPeerConnection({
+        iceServers: [
+            { urls: "stun:stun.l.google.com:19302" }
+        ]
     });
 
-function render() {
-    if (ips.size > 0) {
-        status.innerHTML = `<span class="ok">WebRTC ACTIVE</span>`;
-        output.innerHTML = Array.from(ips)
-            .map(ip => `IP: ${ip}`)
-            .join("<br>");
-    }
-}
+    pc.createDataChannel("probe");
 
-// Timeout check (if no ICE candidates appear)
-setTimeout(() => {
-    if (ips.size === 0) {
-        status.innerHTML = `<span class="bad">WebRTC blocked or secure mode enabled</span>`;
-        output.innerHTML = `
-            No IPs detected.<br><br>
-            Possible reasons:<br>
-            - WebRTC disabled in browser<br>
-            - VPN blocking WebRTC leaks<br>
-            - Browser uses mDNS anonymization<br>
-        `;
-    }
-}, 5000);
+    pc.onicecandidate = (event) => {
+        if (!event.candidate) return;
+
+        const parsed = parseCandidate(event.candidate.candidate);
+        if (!parsed) return;
+
+        const { ip, type } = parsed;
+
+        // Filter obvious noise
+        if (!ip || ip === "0.0.0.0") return;
+
+        // Store by type
+        if (type === "host") results.host.add(ip);
+        else if (type === "srflx") results.srflx.add(ip);
+        else if (type === "relay") results.relay.add(ip);
+
+        render();
+    };
+
+    pc.createOffer()
+        .then(offer => pc.setLocalDescription(offer))
+        .catch(err => {
+            statusEl.innerHTML = `<span class="bad">WebRTC init failed: ${err}</span>`;
+        });
+
+    // Timeout / fallback detection
+    setTimeout(() => {
+        if (results.host.size === 0 &&
+            results.srflx.size === 0 &&
+            results.relay.size === 0) {
+
+            statusEl.innerHTML = `<span class="bad">WebRTC blocked or fully restricted</span>`;
+            outputEl.innerHTML = `
+                <div class="warn">
+                    No ICE candidates were exposed.<br><br>
+                    Possible reasons:
+                    <ul>
+                        <li>WebRTC disabled in browser</li>
+                        <li>Strict privacy mode (mDNS masking)</li>
+                        <li>VPN blocking STUN traffic</li>
+                        <li>Firewall restrictions</li>
+                    </ul>
+                </div>
+            `;
+        }
+
+        try {
+            pc.close();
+        } catch {}
+    }, 6000);
+
+})();
 </script>
 
 </body>
