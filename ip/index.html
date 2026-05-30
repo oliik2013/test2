@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>WebRTC IP Detector</title>
+<style>
+    body {
+        font-family: monospace;
+        background: #0d1117;
+        color: #c9d1d9;
+        padding: 20px;
+    }
+    .ok { color: #3fb950; }
+    .bad { color: #f85149; }
+    .box {
+        margin-top: 10px;
+        padding: 10px;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        background: #161b22;
+    }
+</style>
+</head>
+<body>
+
+<h2>WebRTC IP Detector</h2>
+<div id="status">Starting...</div>
+<div class="box" id="output"></div>
+
+<script>
+const output = document.getElementById("output");
+const status = document.getElementById("status");
+
+const ips = new Set();
+let finished = false;
+
+// Create RTCPeerConnection
+const pc = new RTCPeerConnection({
+    iceServers: [
+        { urls: "stun:stun.l.google.com:19302" }
+    ]
+});
+
+// Needed to trigger ICE gathering
+pc.createDataChannel("");
+
+// Collect ICE candidates
+pc.onicecandidate = (event) => {
+    if (!event.candidate) return;
+
+    const cand = event.candidate.candidate;
+
+    // Extract IPv4 / IPv6
+    const match = cand.match(
+        /(\d{1,3}(\.\d{1,3}){3}|[a-f0-9:]{2,})/i
+    );
+
+    if (match) {
+        ips.add(match[1]);
+        render();
+    }
+};
+
+// Start negotiation
+pc.createOffer()
+    .then(offer => pc.setLocalDescription(offer))
+    .catch(err => {
+        status.innerHTML = `<span class="bad">Error starting WebRTC: ${err}</span>`;
+    });
+
+function render() {
+    if (ips.size > 0) {
+        status.innerHTML = `<span class="ok">WebRTC ACTIVE</span>`;
+        output.innerHTML = Array.from(ips)
+            .map(ip => `IP: ${ip}`)
+            .join("<br>");
+    }
+}
+
+// Timeout check (if no ICE candidates appear)
+setTimeout(() => {
+    if (ips.size === 0) {
+        status.innerHTML = `<span class="bad">WebRTC blocked or secure mode enabled</span>`;
+        output.innerHTML = `
+            No IPs detected.<br><br>
+            Possible reasons:<br>
+            - WebRTC disabled in browser<br>
+            - VPN blocking WebRTC leaks<br>
+            - Browser uses mDNS anonymization<br>
+        `;
+    }
+}, 5000);
+</script>
+
+</body>
+</html>
